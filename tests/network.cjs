@@ -1,0 +1,93 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
+const {chromium,executablePath}=require('./runtime.cjs');
+const {summary,comparison,validSaved}=require('../extension/network.js');
+assert.deepEqual(summary([{ok:true,ms:20},{ok:false},{ok:true,ms:200},{ok:true,ms:22}]),{count:3,failures:1,median:22,min:20,max:200});
+assert.match(comparison({count:3,failures:0,min:20,max:25,median:22},{min:190,max:210,median:200}),/快 178/);
+assert.match(comparison({count:3,failures:0,min:20,max:210,median:22},{min:190,max:210,median:200}),/差异不明显/);
+assert.match(comparison({count:3,failures:1,min:20,max:25,median:22},{min:190,max:210,median:200}),/暂不比较/);
+assert.equal(validSaved({at:Date.now(),count:4,failures:0,min:1,median:20,max:30}),true);
+assert.ok(!validSaved({at:Date.now()-86400001,count:4,failures:0,min:1,median:20,max:30}));
+(async()=>{
+  fs.mkdirSync('artifacts/network',{recursive:true});
+  let delay=25,bodyDelay=0,status=200,type='text/css',redirect=false,requests=[],inflight=0,maxInflight=0;
+  const server=http.createServer(async(req,res)=>{
+    if(req.url.startsWith('/static/main/styles.css')){
+      requests.push(req.url);inflight++;maxInflight=Math.max(maxInflight,inflight);
+      res.once('close',()=>inflight--);
+      await new Promise(r=>setTimeout(r,delay));
+      if(res.destroyed)return;
+      if(redirect){res.writeHead(302,{location:'/login/'});res.end();return;}
+      res.writeHead(status,{'content-type':type,'cache-control':'public, max-age=86400'});res.flushHeaders();
+      await new Promise(r=>setTimeout(r,bodyDelay));if(!res.destroyed)res.end('body { color: #222; }');
+    }else{res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end('<html><body style="background:#eeeee8"><h1>隔离测速测试</h1></body></html>');}
+  });
+  await new Promise(r=>server.listen(0,'127.0.0.1',r));
+  const browser=await chromium.launch({executablePath,headless:true});
+  const ctx=await browser.newContext({viewport:{width:1150,height:820}}),p=await ctx.newPage(),errors=[],passed=[];
+  p.on('pageerror',e=>errors.push(e.message));const ok=t=>{passed.push(t);console.log('PASS:',t);};
+  await p.addInitScript(()=>{
+    const values={},listeners=[];
+    window.chrome={storage:{local:{get:async keys=>Object.fromEntries(keys.map(k=>[k,values[k]])),set:async obj=>{const changes={};for(const [k,v]of Object.entries(obj)){changes[k]={newValue:v};values[k]=v;}listeners.forEach(f=>f(changes,'local'));}},onChanged:{addListener:f=>listeners.push(f),removeListener:f=>listeners.splice(listeners.indexOf(f),1)}}};
+  });
+  try{
+    await p.goto(`http://127.0.0.1:${server.address().port}/cart/`);
+    await p.addScriptTag({path:path.resolve('extension/network.js')});
+    await p.evaluate(()=>window.monitor=MealNetwork.mount());
+    const indicator=p.locator('#meal-network-indicator');
+    await indicator.locator('#toggle').click();
+    await p.waitForFunction(()=>document.getElementById('meal-network-indicator').shadowRoot.getElementById('failures').textContent==='0 / 5 次');
+    await p.waitForFunction(()=>!document.getElementById('meal-network-indicator').shadowRoot.getElementById('retest').disabled);
+    const initial=Number(await indicator.locator('#value').textContent());assert.ok(initial>=20 && initial<180);
+    assert.equal(requests.length,6);assert.equal(new Set(requests).size,6);assert.equal(maxInflight,1);
+    assert.match(await indicator.locator('#first').textContent(),/不计入/);
+    ok('six real HTTP requests: first separate, five-sample median, no cached success, no overlap');
+    await p.screenshot({path:'artifacts/network/expanded.png'});
+    delay=180;bodyDelay=120;
+    await indicator.locator('#retest').click();
+    await p.waitForFunction(()=>document.getElementById('meal-network-indicator').shadowRoot.getElementById('failures').textContent==='0 / 5 次');
+    await p.waitForFunction(()=>!document.getElementById('meal-network-indicator').shadowRoot.getElementById('retest').disabled);
+    const slow=Number(await indicator.locator('#value').textContent());assert.ok(slow>=290 && slow>initial+150);
+    assert.match(await indicator.locator('#compare').textContent(),/比上次慢/);
+    ok('slower server and delayed body increase displayed latency; comparison retains previous round');
+    status=503;delay=10;bodyDelay=0;
+    await indicator.locator('#retest').click();
+    await p.waitForFunction(()=>document.getElementById('meal-network-indicator').shadowRoot.getElementById('failures').textContent==='5 / 5 次');
+    assert.equal(await indicator.locator('#value').textContent(),'回复异常');
+    assert.match(await indicator.locator('#compare').textContent(),/暂不比较/);
+    ok('HTTP errors are failures, never a fast sample or false improvement');
+    status=200;type='text/html';await indicator.locator('#retest').click();
+    await p.waitForFunction(()=>document.getElementById('meal-network-indicator').shadowRoot.getElementById('failures').textContent==='5 / 5 次');
+    assert.equal(await indicator.locator('#value').textContent(),'回复异常');ok('HTML login or replacement content cannot masquerade as a CSS timing');
+    type='text/css';delay=800;await indicator.locator('#retest').click();
+    await p.waitForTimeout(100);
+    await p.evaluate(()=>monitor.setActivity('演练中，测速暂停'));
+    const before=requests.length;await p.waitForTimeout(1500);assert.equal(requests.length,before);
+    assert.equal(await indicator.locator('#failures').textContent(),'0 / 0 次');
+    assert.match(await indicator.locator('#subtitle').textContent(),/演练中/);ok('pausing aborts in-flight probe without recording a failure');
+    await p.evaluate(()=>monitor.setActivity('',performance.now()+15500));
+    await p.waitForTimeout(1300);const guarded=requests.length;
+    assert.match(await indicator.locator('#subtitle').textContent(),/临近下单/);await p.waitForTimeout(1100);assert.equal(requests.length,guarded);
+    ok('deadline guard automatically stops sampling 15 seconds before checkout');
+    await p.evaluate(async()=>{await chrome.storage.local.set({networkGuard:{from:Date.now()-100,until:Date.now()+20000}});monitor.setActivity('');});
+    assert.match(await indicator.locator('#subtitle').textContent(),/抢饭进行中/);
+    await p.waitForTimeout(1100);assert.equal(requests.length,guarded);ok('shared guard suppresses probes from other visible tabs');
+    await p.evaluate(async()=>{await chrome.storage.local.set({networkGuard:null});monitor.setActivity('测试暂停');});
+    const b=await indicator.boundingBox(),handle=await indicator.locator('#drag').boundingBox();
+    await p.mouse.move(handle.x+5,handle.y+5);await p.mouse.down();await p.mouse.move(handle.x+205,handle.y-95,{steps:5});await p.mouse.up();
+    const moved=await indicator.boundingBox();assert.ok(moved.x>b.x+180);
+    await indicator.locator('#drag').focus();await p.keyboard.press('ArrowRight');
+    assert.ok((await indicator.boundingBox()).x>moved.x+15);
+    await p.setViewportSize({width:360,height:520});await p.waitForTimeout(100);
+    const narrow=await indicator.boundingBox();assert.ok(narrow.x>=0 && narrow.y>=0 && narrow.x+narrow.width<=360 && narrow.y+narrow.height<=520);
+    await p.screenshot({path:'artifacts/network/narrow.png'});ok('drag, keyboard movement, and viewport clamping');
+    await ctx.setOffline(true);await p.waitForTimeout(50);assert.equal(await indicator.locator('#value').textContent(),'离线');await ctx.setOffline(false);
+    ok('offline status replaces stale latency');
+    delay=6000;await p.evaluate(()=>monitor.setActivity(''));
+    await p.waitForFunction(()=>document.getElementById('meal-network-indicator').shadowRoot.getElementById('failures').textContent==='1 / 1 次',{timeout:13000});
+    assert.equal(await indicator.locator('#value').textContent(),'超时');ok('hung responses time out and are not displayed as good latency');
+    await p.evaluate(()=>monitor.setActivity('测试结束'));
+    assert.deepEqual(errors,[]);ok('no unhandled browser errors');
+    fs.writeFileSync('artifacts/network/test-result.json',JSON.stringify({passed:true,checks:passed,initialMs:initial,slowMs:slow,realCheckoutRequests:0,pageErrors:errors},null,2));
+  }finally{await ctx.close();await browser.close();server.closeAllConnections();await new Promise(r=>server.close(r));}
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,0 +1,144 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium, executablePath } = require('./runtime.cjs');
+(async () => {
+  fs.mkdirSync('artifacts/results/design', { recursive:true });
+  const profile = fs.mkdtempSync('/tmp/meal-design-test-');
+  const context = await chromium.launchPersistentContext(profile, {
+    executablePath,
+    headless:true, args:[`--disable-extensions-except=${path.resolve('extension')}`,`--load-extension=${path.resolve('extension')}`], viewport:{width:1150,height:860}
+  });
+  const errors=[];let checkoutRequests=0;
+  try {
+    const worker=context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+    await worker.evaluate(() => {
+      const originalCalibrate = calibrate;
+      globalThis.calibrationCalls = 0;
+      calibrate = async () => { calibrationCalls++; const result = await originalCalibrate(); globalThis.lastCalibration = result; return result; };
+      MealClock.parseTime = () => Date.now();
+      globalThis.fetch = async () => { await new Promise(r=>setTimeout(r,180));return new Response('fixture',{status:200}); };
+    });
+    await context.route('**/dh.stjohns.hk/**', route => {
+      if(route.request().url().includes('/ordered/')) checkoutRequests++;
+      return route.fulfill({contentType:'text/html; charset=utf-8',body:'<html><body style="background:#dcded8"><h1>Interface test</h1></body></html>'});
+    });
+    const p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));
+    await p.goto('https://dh.stjohns.hk/cart/');
+    const shell=p.locator('.shell');await shell.waitFor();
+    await shell.screenshot({path:'artifacts/results/design/scaled-setup.png',animations:'disabled'});
+    const scale = await shell.evaluate(el => {
+      const scaled = el.getBoundingClientRect();
+      el.style.zoom='1'; const original=el.getBoundingClientRect(); el.style.removeProperty('zoom');
+      return {width:scaled.width/original.width,height:scaled.height/original.height};
+    });
+    assert.ok(Math.abs(scale.width-.9)<.002 && Math.abs(scale.height-.9)<.002, 'entire panel scales uniformly to 90%');
+    const host=p.locator('#meal-timer-extension'), before=await host.boundingBox(),handle=await shell.locator('header').boundingBox();
+    await p.mouse.move(handle.x+30,handle.y+10);await p.mouse.down();await p.mouse.move(handle.x-170,handle.y-90,{steps:8});await p.mouse.up();
+    const moved=await host.boundingBox();
+    assert.ok(Math.abs(moved.x-(before.x-200))<2 && Math.abs(moved.y-(before.y-100))<2,'drag tracks pointer after scaling');
+
+    assert.equal(await p.locator('#status').isVisible(),false);
+    assert.equal(await p.locator('#connection').isVisible(),false);
+    assert.equal(await p.locator('#arm').isDisabled(),true);
+    await p.getByRole('radio',{name:/Breakfast/}).click();
+    assert.equal(await p.locator('#hero-time').textContent(),'07:40');
+    await p.getByRole('radio',{name:/Breakfast/}).press('ArrowRight');
+    assert.equal(await p.getByRole('radio',{name:/Lunch/}).getAttribute('aria-checked'),'true');
+    assert.equal(await p.locator('#hero-time').textContent(),'12:20');
+    await p.getByRole('radio',{name:/Lunch/}).press('End');
+    assert.equal(await p.locator('#hero-time').textContent(),'18:50');
+    const syncStarted = Date.now();
+    await p.getByRole('button',{name:'校准时间',exact:true}).click();
+    await p.locator('.shell[data-sync="syncing"]').waitFor();
+    assert.equal(await p.locator('.minute').evaluate(e=>getComputedStyle(e).animationName),'turn');
+    await p.locator('.shell[data-sync-phase="details"]').waitFor();
+    const measured = await worker.evaluate(() => lastCalibration);
+    const correction = Math.round(measured.offset);
+    assert.equal(await p.locator('#clock-title').textContent(), `修正 ${correction >= 0 ? '+' : ''}${correction} 毫秒`);
+    assert.equal(await p.locator('#clock').textContent(), `预估误差 ±${measured.uncertainty} 毫秒`);
+    assert.equal(await p.locator('#sync').isDisabled(),true);
+    await p.locator('#sync').dispatchEvent('click');
+    assert.equal(await worker.evaluate(() => calibrationCalls),1,'extra click does not start another calibration');
+    await shell.screenshot({path:'artifacts/results/design/calibration-details.png',animations:'disabled'});
+    await p.locator('.shell[data-sync="synced"]').waitFor();
+    assert.ok(Date.now()-syncStarted >= 3500,'readable calibration presentation lasts at least 3.5 seconds');
+    assert.equal(await p.locator('#clock-title').textContent(),'香港标准时间');
+    assert.equal(await p.locator('#clock').textContent(),'香港天文台 · 已同步');
+    assert.equal(await p.locator('#hero-time').evaluate(el=>el.getAnimations().length),0,'calibration does not animate opening time');
+    assert.equal(await p.locator('#sync-stop').count(),0,'calibration has no cancel button');
+    const sweep=await p.locator('.sync-row').evaluate(el=>({left:getComputedStyle(el,'::before').left,right:getComputedStyle(el,'::before').right,clip:getComputedStyle(el.closest('#view-stage')).overflow}));
+    assert.ok(Number.parseFloat(sweep.left)<0&&Number.parseFloat(sweep.right)<0,'preserve full-width calibration sweep');
+    assert.equal(sweep.clip,'visible');
+    await p.getByRole('button',{name:'校准时间',exact:true}).click();
+    await p.locator('.shell[data-sync="synced"]').waitFor();
+    assert.equal(await worker.evaluate(()=>calibrationCalls),2);
+    assert.equal(await p.locator('#sync').isEnabled(),true);
+    assert.equal(await p.locator('#status').isVisible(),false);
+    await p.locator('#confirm').check();
+    assert.equal(await p.locator('#arm').isEnabled(),true);
+    await shell.screenshot({path:'artifacts/results/design/setup.png',animations:'disabled'});
+    await p.getByRole('radio',{name:/Lunch/}).click();
+    assert.equal(await p.locator('#confirm').isChecked(),false);
+    await p.getByRole('radio',{name:/Dinner/}).click();
+    await p.evaluate(()=>{
+      const root=document.getElementById('meal-timer-extension').shadowRoot,shell=root.querySelector('.shell');
+      window.__motionSamples={};
+      new MutationObserver(()=>{
+        const view=shell.dataset.view,selector=view==='waiting'?'#active-view':view==='sending'?'#loading-view':view==='result'?'#result-view':null;
+        if(!selector)return;
+        const frames=window.__motionSamples[view]=[];
+        const sample=()=>{if(shell.dataset.view!==view)return;frames.push({opacity:Number(getComputedStyle(root.querySelector(selector)).opacity),height:root.getElementById('view-stage').getBoundingClientRect().height});if(shell.dataset.transitioning&&frames.length<80)requestAnimationFrame(sample);};
+        requestAnimationFrame(sample);
+      }).observe(shell,{attributes:true,attributeFilter:['data-view']});
+    });
+    await p.getByRole('button',{name:'5 秒演练',exact:true}).click();
+    await p.locator('.shell[data-view="waiting"]').waitFor();
+    await p.locator('#setup-view').waitFor({state:'hidden'});
+    assert.equal(await p.locator('#active-view').isVisible(),true);
+    assert.equal(await p.locator('.pair').count(),3);
+    const firstRing = await p.locator('#ring-progress').evaluate(el => ({offset:parseFloat(getComputedStyle(el).strokeDashoffset),duration:el.getAnimations()[0].effect.getTiming().duration}));
+    assert.ok(firstRing.offset > 75 && firstRing.duration > 4500 && firstRing.duration <= 5000, 'ring starts a single countdown-length cycle');
+    await p.waitForFunction(() => {const el=document.getElementById('meal-timer-extension').shadowRoot.getElementById('ring-progress');const offset=parseFloat(getComputedStyle(el).strokeDashoffset);return offset<65&&offset>20;});
+    await shell.screenshot({path:'artifacts/results/design/countdown.png',animations:'allow'});
+    await p.locator('.shell[data-view="sending"]').waitFor();
+    assert.equal(await p.locator('#ring-progress').evaluate(el=>parseFloat(getComputedStyle(el).strokeDashoffset)),0,'ring completes when countdown ends');
+    assert.equal(await p.locator('#loading-view').isVisible(),true);
+    assert.equal(await p.locator('.loader-arc').evaluate(e=>getComputedStyle(e).animationName),'loader-turn');
+    await shell.screenshot({path:'artifacts/results/design/loading.png',animations:'disabled'});
+    await p.locator('.shell[data-view="result"]').waitFor();
+    assert.match(await p.locator('#status').textContent(),/演练完成，未下单/);
+    assert.equal(await p.locator('#send-delay').textContent(),'—');
+    assert.equal(await p.locator('#confirm-delay').textContent(),'—');
+    await p.locator('.shell:not([data-transitioning])').waitFor();
+    await shell.screenshot({path:'artifacts/results/design/result.png',animations:'disabled'});
+    const motion=await p.evaluate(()=>window.__motionSamples);
+    for(const state of ['waiting','sending','result'])assert.ok(motion[state].some(frame=>frame.opacity>0&&frame.opacity<1),state+' uses intermediate fade frames');
+    assert.ok(new Set(motion.result.map(frame=>Math.round(frame.height))).size>2,'result transition animates height');
+    fs.writeFileSync('artifacts/results/design/motion-frames.json',JSON.stringify(motion,null,2));
+
+    await p.getByRole('button',{name:'返回设置',exact:true}).click();
+    await p.emulateMedia({reducedMotion:'reduce'});
+    await p.getByRole('button',{name:'5 秒演练',exact:true}).click();
+    await p.locator('.shell[data-view="waiting"]').waitFor();
+    assert.equal(await p.locator('#ring-progress').evaluate(e=>e.getAnimations()[0].effect.getTiming().iterations),1,'functional progress never loops');
+    await p.getByRole('button',{name:'取消',exact:true}).click();
+    await p.locator('.shell:not([data-transitioning])').waitFor();
+    assert.equal(await p.locator('#setup-view').isVisible(),true);
+    await p.setViewportSize({width:360,height:520});
+    const b=await shell.boundingBox();assert.ok(b.x>=0&&b.y>=0&&b.x+b.width<=360&&b.y+b.height<=520);
+    await p.getByRole('radio',{name:/Breakfast/}).click();
+    await p.getByRole('button',{name:'5 秒演练',exact:true}).click();
+    await p.locator('.shell[data-view="waiting"]').waitFor();
+    await p.getByRole('button',{name:'取消',exact:true}).click();
+    assert.equal(checkoutRequests,0);
+    assert.deepEqual(errors,[]);
+    const extensionId=new URL(worker.url()).host;
+    await p.goto(`chrome-extension://${extensionId}/popup.html`);
+    await p.getByText('最近记录',{exact:true}).click();
+    assert.match(await p.locator('#logs').textContent(),/演练|取消/);
+    await p.screenshot({path:'artifacts/results/design/popup.png'});
+    fs.writeFileSync('artifacts/results/design/test-result.json',JSON.stringify({passed:true,checks:['deadline-driven single-cycle progress ring','uniform 90% panel scale','scaled drag tracks pointer','meal keyboard navigation','3.6-second calibration reveal with real values','repeat-click guard','no calibration cancel button','preserved full-width sweep and static opening time','animated clock','animated consent','hidden routine messages','dedicated countdown view','three-stage demo with animated loading and no invented metrics','frame-sampled fade and height transitions','demo result and return','reduced motion','small viewport controls','styled popup logs'],realCheckoutRequests:0,pageErrors:errors},null,2));
+    console.log('PASS: all design interactions, keyboard, reduced motion, small viewport, popup; no checkout');
+  } finally {await context.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

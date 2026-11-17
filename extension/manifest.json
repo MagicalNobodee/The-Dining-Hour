@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "食堂准点结账",
+  "version": "0.5.0",
+  "description": "按香港开餐时间直接结账，提前检查连接，识别结果并在明确未开放时有限重试。",
+  "permissions": [
+    "storage",
+    "power"
+  ],
+  "host_permissions": [
+    "https://time.weather.gov.hk/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "食堂准点结账"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://dh.stjohns.hk/cart/*",
+        "http://dh.stjohns.hk/cart/*",
+        "https://dh.stjohns.hk/ordered/*",
+        "http://dh.stjohns.hk/ordered/*"
+      ],
+      "js": [
+        "core.js",
+        "site.js",
+        "view.js",
+        "network.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
