@@ -7,125 +7,294 @@ const { chromium, executablePath } = require(path.join(root, 'tests/runtime.cjs'
 const outDir = path.join(root, 'docs/assets');
 fs.mkdirSync(outDir, { recursive: true });
 
+const staleFlow = path.join(outDir, 'how-it-works.png');
+if (fs.existsSync(staleFlow)) fs.unlinkSync(staleFlow);
+
 const uri = rel => 'data:image/png;base64,' + fs.readFileSync(path.join(root, rel)).toString('base64');
 const imgs = {
-  setup: uri('artifacts/results/design/setup.png'),
   calib: uri('artifacts/results/design/calibration-details.png'),
   count: uri('artifacts/results/design/countdown.png'),
-  success: uri('artifacts/results/success.png'),
-  popup: uri('artifacts/results/design/popup.png'),
-  net: uri('artifacts/network/expanded.png')
+  success: uri('artifacts/results/success.png')
 };
 
-const sans = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif';
-const serif = '"Iowan Old Style", "Songti SC", "STSong", Georgia, serif';
-const commonCSS = `
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: transparent; font-family: ${sans}; color: #272b2a; padding: 6px; }
-  .card { width: 100%; height: 100%; border-radius: 26px; overflow: hidden; border: 1px solid #dfd7c7;
-    background: linear-gradient(138deg, #fffdf9 0%, #f3f0e8 58%, #eae5d9 100%);
-    box-shadow: 0 10px 28px rgba(34,39,36,0.08), inset 0 1px 0 #fff; }
-  .kicker { font-size: 11px; letter-spacing: 2.5px; color: #8c7858; font-weight: 600; text-transform: uppercase; }
-`;
+const sans = '-apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif';
+const serif = '"Iowan Old Style", "Palatino Linotype", "Songti SC", "STSong", Georgia, serif';
 
-const heroHTML = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${commonCSS}
-  body { width: 1280px; height: 490px; }
-  .card { position: relative; display: grid; grid-template-columns: 1.15fr 0.85fr; align-items: center; padding: 42px 50px; }
-  .card::before { content:""; position:absolute; right:-100px; top:-120px; width:520px; height:520px; border-radius:50%; background:radial-gradient(circle, rgba(196,167,117,0.22), transparent 68%); }
-  .brand { display:flex; align-items:center; gap:12px; margin-bottom:18px; }
-  .sigil { position:relative; width:30px; height:30px; border:1.4px solid #a5885e; border-radius:50%; display:grid; place-items:center; background:#fffdf8; }
-  .sigil::before { content:""; width:18px; height:18px; border:1px solid rgba(165,136,94,0.55); border-radius:50%; }
-  .sigil::after { content:""; position:absolute; width:1.3px; height:36px; background:linear-gradient(transparent,#a5885e 20%,#a5885e 80%,transparent); transform:rotate(33deg); }
-  .badge { padding:4px 11px; border-radius:999px; background:rgba(90,114,84,0.12); border:1px solid rgba(90,114,84,0.28); color:#486043; font-size:11px; font-weight:600; }
-  h1 { font-family:${serif}; font-size:42px; line-height:1.18; color:#222725; letter-spacing:1px; margin-bottom:8px; }
-  .sub { font-family:${serif}; font-size:15.5px; color:#8c7858; font-style:italic; margin-bottom:18px; }
-  .desc { font-size:14.8px; line-height:1.75; color:#525752; max-width:600px; margin-bottom:24px; }
-  .desc b { color:#242927; }
-  .pills { display:flex; flex-wrap:wrap; gap:9px; }
-  .pill { display:inline-flex; align-items:center; gap:7px; padding:7px 13px; border-radius:11px; background:rgba(255,253,248,0.9); border:1px solid #dcd4c4; font-size:12.2px; color:#3a403c; font-weight:500; }
-  .dot { width:6px; height:6px; border-radius:50%; background:#9c7950; } .dot.g { background:#5a7254; }
-  .stage { position:relative; height:100%; z-index:2; }
-  .shot { position:absolute; border-radius:18px; box-shadow:0 20px 46px rgba(24,30,28,0.18); border:1px solid rgba(255,255,255,0.88); background:#fffdf8; }
-  .s1 { width:218px; left:6px; top:8px; z-index:2; transform:rotate(-2deg); }
-  .s2 { width:198px; right:10px; top:-4px; z-index:1; transform:rotate(2.5deg); }
-  .s3 { width:214px; right:22px; bottom:-2px; z-index:3; box-shadow:0 24px 52px rgba(24,30,28,0.24); }
-</style><body><div class="card">
-  <div style="position:relative;z-index:2;padding-right:24px">
-    <div class="brand"><span class="sigil"></span><span class="kicker" style="color:#6e6759">准点 · THE DINING HOUR</span><span class="badge">v0.5.0 · Chrome MV3</span></div>
-    <h1>食堂准点结账</h1>
-    <div class="sub">HKO-Calibrated Punctual Meal Checkout for St. John's College</div>
-    <p class="desc">沿用本机浏览器登录态与已选购物车，在<b>香港天文台标准时间</b>开餐瞬间于页面内直接发起结账。提前预热连接并锁定购物车基线，仅在明确未开放时有限重试，<b>核实新增匹配订单证据后</b>才确认成交。</p>
-    <div class="pills">
-      <span class="pill"><i class="dot"></i>香港天文台三次采样校时</span>
-      <span class="pill"><i class="dot g"></i>同源页面直发 · 零跳转损耗</span>
-      <span class="pill"><i class="dot"></i>购物车与订单双向核验</span>
-      <span class="pill"><i class="dot g"></i>零第三方依赖 · 不存密码与凭据</span>
+const ticks = Array.from({ length: 60 }, (_, i) => {
+  const major = i % 5 === 0;
+  const y1 = major ? 6 : 8;
+  const y2 = major ? 13.5 : 11.5;
+  const sw = major ? 1.35 : 0.8;
+  const op = major ? 0.72 : 0.34;
+  return `<line x1="50" y1="${y1}" x2="50" y2="${y2}" stroke="#9a7b4f" stroke-width="${sw}" stroke-opacity="${op}" stroke-linecap="round" transform="rotate(${i * 6} 50 50)"/>`;
+}).join('');
+
+const bgTicks = Array.from({ length: 72 }, (_, i) => {
+  const major = i % 6 === 0;
+  const y1 = major ? 8 : 12;
+  const y2 = major ? 22 : 17;
+  return `<line x1="200" y1="${y1}" x2="200" y2="${y2}" stroke="#a5885e" stroke-width="${major ? 1.1 : 0.65}" transform="rotate(${i * 5} 200 200)"/>`;
+}).join('');
+
+const heroHTML = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 840px;
+    height: 256px;
+    background: transparent;
+    font-family: ${sans};
+    padding: 4px;
+  }
+  .frame {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 20px;
+    overflow: hidden;
+    border: 1px solid #d8cfc0;
+    background:
+      radial-gradient(ellipse 75% 95% at 50% 0%, rgba(255, 254, 250, 0.96) 0%, rgba(246, 242, 233, 0.4) 68%, transparent 100%),
+      radial-gradient(circle at 14% 88%, rgba(168, 138, 93, 0.11) 0%, transparent 52%),
+      radial-gradient(circle at 88% 18%, rgba(90, 114, 84, 0.08) 0%, transparent 48%),
+      linear-gradient(165deg, #fdfbf6 0%, #f4efe4 56%, #ece5d6 100%);
+    box-shadow: 0 8px 24px rgba(32, 37, 35, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .frame::before {
+    content: "";
+    position: absolute;
+    inset: 10px;
+    border-radius: 13px;
+    border: 1px solid rgba(165, 136, 94, 0.24);
+    pointer-events: none;
+  }
+  .grain {
+    position: absolute;
+    inset: 0;
+    opacity: 0.26;
+    mix-blend-mode: multiply;
+    pointer-events: none;
+  }
+  .watermark {
+    position: absolute;
+    right: -86px;
+    top: -72px;
+    width: 390px;
+    height: 390px;
+    opacity: 0.13;
+    pointer-events: none;
+  }
+  .watermark-left {
+    position: absolute;
+    left: -115px;
+    bottom: -135px;
+    width: 320px;
+    height: 320px;
+    opacity: 0.08;
+    pointer-events: none;
+  }
+  .content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 0 36px;
+  }
+  .lockup {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 16px;
+  }
+  .emblem {
+    width: 66px;
+    height: 66px;
+    flex-shrink: 0;
+    filter: drop-shadow(0 6px 14px rgba(42, 36, 26, 0.11));
+  }
+  .titles {
+    display: flex;
+    align-items: baseline;
+    gap: 15px;
+  }
+  .zh {
+    font-family: ${serif};
+    font-size: 46px;
+    font-weight: 700;
+    color: #1f2422;
+    letter-spacing: 3px;
+    line-height: 1;
+  }
+  .sep {
+    width: 1.5px;
+    height: 30px;
+    background: linear-gradient(to bottom, transparent, #b3976d 20%, #b3976d 80%, transparent);
+    align-self: center;
+  }
+  .en {
+    font-family: ${serif};
+    font-size: 31px;
+    font-weight: 500;
+    color: #2f3532;
+    letter-spacing: 0.6px;
+    line-height: 1;
+  }
+  .rule {
+    width: 120px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(154, 123, 79, 0.55), transparent);
+    margin-bottom: 14px;
+  }
+  .tagline {
+    font-size: 16.5px;
+    font-weight: 450;
+    color: #505651;
+    letter-spacing: 0.9px;
+    line-height: 1.4;
+  }
+</style><body>
+  <div class="frame">
+    <svg class="grain" width="100%" height="100%">
+      <filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter>
+      <rect width="100%" height="100%" filter="url(#n)" opacity="0.22"/>
+    </svg>
+    <svg class="watermark" viewBox="0 0 400 400" fill="none">
+      <circle cx="200" cy="200" r="192" stroke="#9a7b4f" stroke-width="1"/>
+      <circle cx="200" cy="200" r="166" stroke="#9a7b4f" stroke-width="0.75" stroke-dasharray="3 4"/>
+      <circle cx="200" cy="200" r="118" stroke="#9a7b4f" stroke-width="0.8"/>
+      ${bgTicks}
+    </svg>
+    <svg class="watermark-left" viewBox="0 0 400 400" fill="none">
+      <circle cx="200" cy="200" r="188" stroke="#5a7254" stroke-width="1"/>
+      <circle cx="200" cy="200" r="142" stroke="#9a7b4f" stroke-width="0.8"/>
+    </svg>
+    <div class="content">
+      <div class="lockup">
+        <svg class="emblem" viewBox="0 0 100 100" fill="none">
+          <defs>
+            <linearGradient id="dial" x1="14" y1="10" x2="86" y2="90" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#fffef9"/>
+              <stop offset="100%" stop-color="#efe9da"/>
+            </linearGradient>
+            <linearGradient id="brass" x1="10" y1="8" x2="90" y2="92" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#c5a676"/>
+              <stop offset="50%" stop-color="#96764b"/>
+              <stop offset="100%" stop-color="#b89868"/>
+            </linearGradient>
+          </defs>
+          <circle cx="50" cy="50" r="47" fill="url(#dial)" stroke="url(#brass)" stroke-width="2"/>
+          <circle cx="50" cy="50" r="42.5" stroke="#c8b698" stroke-width="0.75"/>
+          ${ticks}
+          <circle cx="50" cy="50" r="28" stroke="#d4c7b0" stroke-width="0.8" stroke-dasharray="2 2.5"/>
+          <line x1="50" y1="60" x2="50" y2="16" stroke="#232826" stroke-width="2.1" stroke-linecap="round"/>
+          <line x1="41" y1="55" x2="66" y2="38" stroke="#9a7b4f" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="50" cy="14" r="2.4" fill="#5a7254"/>
+          <circle cx="50" cy="50" r="4.2" fill="#fffdf8" stroke="#96764b" stroke-width="1.8"/>
+          <circle cx="50" cy="50" r="1.6" fill="#5a7254"/>
+        </svg>
+        <div class="titles">
+          <span class="zh">准点</span>
+          <span class="sep"></span>
+          <span class="en">The Dining Hour</span>
+        </div>
+      </div>
+      <div class="rule"></div>
+      <p class="tagline">香港大学圣约翰学院食堂准点结账浏览器扩展 · 天文台校时与订单核验</p>
     </div>
   </div>
-  <div class="stage">
-    <img class="shot s2" src="${imgs.count}" /><img class="shot s1" src="${imgs.setup}" /><img class="shot s3" src="${imgs.success}" />
-  </div>
-</div></body></html>`;
+</body></html>`;
 
-const steps = [
-  ['01', '开餐前 30 分钟内', '天文台校时与基线快照', '向香港天文台连续请求 3 次取最快往返修正时钟偏差；准备时只读核对登录状态、购物车餐品指纹与现有订单列表。', '拦截未登录、空车与过期校时'],
-  ['02', 'T - 45s / 15s / 8s', '二次复校与静默预热', '前 45 秒自动复校并重算进度环；前 15 秒跨标签页暂停网络测速让出连接；前 8 秒读取购物车预热并确认远端未变。', '发现购物车或余额变动立即停机提醒'],
-  ['03', '07:40 / 12:20 / 18:50', '准点直发与克制重试', '单调计时器归零瞬间直接发起同源结账；仅当明确收到「食堂未开放」且购物车与余额未变时，按 100/200/400 ms 串行重试。', '最多 4 次 · 严格限制在开餐后 4 秒内'],
-  ['04', '最多 3 轮只读复查', '订单真凭实据核验', '绝不凭 HTTP 200 或空购物车盲判成功；必须核对新增有效订单的餐品与数量完全一致，才展示「下单成功」与双延迟指标。', '同餐次会话防重 · 刷新不重复提交']
-];
-const flowHTML = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${commonCSS}
-  body { width: 1280px; height: 400px; }
-  .card { padding: 32px 38px; display:flex; flex-direction:column; justify-content:space-between; }
-  .top { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid rgba(39,43,42,0.09); padding-bottom:14px; }
-  .title { font-family:${serif}; font-size:24px; font-weight:600; color:#222725; margin-top:4px; }
-  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-top:18px; flex:1; }
-  .step { background:rgba(255,253,248,0.9); border:1px solid #e2dacb; border-radius:18px; padding:18px 17px 15px; display:flex; flex-direction:column; justify-content:space-between; }
-  .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-  .num { font-family:${serif}; font-size:21px; font-weight:600; color:#9c7950; background:rgba(165,136,94,0.12); width:34px; height:34px; border-radius:9px; display:grid; place-items:center; }
-  .step:last-child .num { color:#4d6748; background:rgba(90,114,84,0.14); }
-  .when { font-size:10.8px; padding:3px 9px; border-radius:999px; background:#f0ece1; color:#6d685c; font-weight:500; }
-  h3 { font-size:15.5px; color:#232826; margin-bottom:7px; }
-  p { font-size:12.5px; line-height:1.65; color:#5a5f58; }
-  .tag { margin-top:10px; padding-top:9px; border-top:1px dashed #e3dccf; font-size:11.3px; color:#7e735f; font-weight:500; }
-  .step:last-child .tag { color:#4d6748; }
-</style><body><div class="card">
-  <div class="top"><div><div class="kicker">HOW IT WORKS · TIMELINE</div><div class="title">四步看懂一次准点结账</div></div><div style="font-size:12.5px;color:#75776e">全程运行于已登录的购物车标签页内 · 关键发送路径零后台消息等待</div></div>
-  <div class="grid">${steps.map(([n,w,t,d,g]) => `<div class="step"><div><div class="head"><span class="num">${n}</span><span class="when">${w}</span></div><h3>${t}</h3><p>${d}</p></div><div class="tag">${g}</div></div>`).join('')}</div>
-</div></body></html>`;
-
-const galleryHTML = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${commonCSS}
-  body { width: 1280px; height: 640px; }
-  .card { padding: 30px 36px; display:flex; flex-direction:column; }
-  .top { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid rgba(39,43,42,0.09); padding-bottom:13px; margin-bottom:18px; }
-  .title { font-family:${serif}; font-size:24px; font-weight:600; color:#222725; margin-top:4px; }
-  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; flex:1; min-height:0; }
-  .col { background:rgba(255,253,248,0.88); border:1px solid #e2dacb; border-radius:18px; padding:14px 13px 13px; display:flex; flex-direction:column; justify-content:space-between; align-items:center; }
-  .box { width:100%; flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; overflow:hidden; }
-  .panel { max-width:100%; max-height:418px; border-radius:15px; box-shadow:0 12px 26px rgba(25,31,29,0.14); border:1px solid #fff; }
-  .net-crop { width:234px; height:234px; overflow:hidden; border-radius:13px; box-shadow:0 10px 22px rgba(25,31,29,0.12); border:1px solid #dfd9ce; position:relative; background:#faf8f2; flex-shrink:0; }
-  .net-crop img { position:absolute; left:-15px; bottom:-15px; width:895px; height:auto; }
-  .pop-crop { width:234px; height:172px; border-radius:13px; overflow:hidden; box-shadow:0 10px 22px rgba(25,31,29,0.11); border:1px solid #e2dacb; position:relative; background:#f5f3ec; flex-shrink:0; }
-  .pop-crop img { position:absolute; left:0; top:0; width:276px; height:auto; display:block; }
-  .cap { width:100%; text-align:center; padding-top:9px; border-top:1px solid rgba(39,43,42,0.07); }
-  .cap b { display:block; font-size:13.2px; color:#242927; margin-bottom:2px; }
-  .cap span { font-size:11.3px; color:#73756c; }
-</style><body><div class="card">
-  <div class="top"><div><div class="kicker">INTERFACE GALLERY · ISOLATED SIMULATION</div><div class="title">真实插件界面全览</div></div><div style="font-size:12.5px;color:#75776e">全部截图均由本地隔离模拟环境自动生成 · 不含任何真实账户信息</div></div>
-  <div class="grid">
-    <div class="col"><div class="box"><img class="panel" src="${imgs.calib}"/></div><div class="cap"><b>1. 餐次选择与校时揭晓</b><span>三段式滑块 · 扫光展示真实偏差与误差</span></div></div>
-    <div class="col"><div class="box"><img class="panel" src="${imgs.count}"/></div><div class="cap"><b>2. 单周期金色进度环</b><span>与校准截止时刻绑定 · 归零刚好走完一圈</span></div></div>
-    <div class="col"><div class="box"><img class="panel" src="${imgs.success}"/></div><div class="cap"><b>3. 订单核验与双延迟指标</b><span>区分发送请求延迟与读到匹配订单延迟</span></div></div>
-    <div class="col"><div class="box"><div class="net-crop"><img src="${imgs.net}"/></div><div class="pop-crop"><img src="${imgs.popup}"/></div></div><div class="cap"><b>4. 本站响应与工具栏日志</b><span>左下角可拖动测速卡片 · 临近开餐自动暂停</span></div></div>
+const galleryHTML = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 840px;
+    height: 520px;
+    background: transparent;
+    font-family: ${sans};
+    color: #242927;
+    padding: 4px;
+  }
+  .wrap {
+    width: 100%;
+    height: 100%;
+    border-radius: 20px;
+    border: 1px solid #dcd4c5;
+    background: linear-gradient(160deg, #fcfaf4 0%, #f2ede2 100%);
+    box-shadow: 0 8px 24px rgba(32, 37, 35, 0.06), inset 0 1px 0 #fff;
+    padding: 20px 22px 18px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
+  }
+  .col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(255, 253, 249, 0.72);
+    border: 1px solid #e4ddd0;
+    border-radius: 15px;
+    padding: 14px 12px 12px;
+  }
+  .shot-wrap {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+  }
+  .shot {
+    max-width: 100%;
+    max-height: 418px;
+    border-radius: 14px;
+    box-shadow: 0 10px 24px rgba(26, 31, 29, 0.13);
+    border: 1px solid rgba(255, 255, 255, 0.9);
+  }
+  .label {
+    width: 100%;
+    text-align: center;
+    padding-top: 10px;
+    margin-top: 10px;
+    border-top: 1px solid rgba(39, 43, 42, 0.07);
+    font-size: 14px;
+    font-weight: 600;
+    color: #2c312e;
+    letter-spacing: 0.3px;
+  }
+  .label span {
+    font-weight: 400;
+    color: #6b6e66;
+    font-size: 13px;
+    margin-left: 6px;
+  }
+</style><body>
+  <div class="wrap">
+    <div class="col">
+      <div class="shot-wrap"><img class="shot" src="${imgs.calib}" /></div>
+      <div class="label">01 · 校时与准备<span>偏差修正</span></div>
+    </div>
+    <div class="col">
+      <div class="shot-wrap"><img class="shot" src="${imgs.count}" /></div>
+      <div class="label">02 · 倒计时等待<span>单圈进度环</span></div>
+    </div>
+    <div class="col">
+      <div class="shot-wrap"><img class="shot" src="${imgs.success}" /></div>
+      <div class="label">03 · 结果核验<span>双延迟记录</span></div>
+    </div>
   </div>
-</div></body></html>`;
+</body></html>`;
 
 (async () => {
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     for (const [name, html, width, height] of [
-      ['hero-banner.png', heroHTML, 1280, 490],
-      ['how-it-works.png', flowHTML, 1280, 400],
-      ['ui-gallery.png', galleryHTML, 1280, 640]
+      ['hero-banner.png', heroHTML, 840, 256],
+      ['ui-gallery.png', galleryHTML, 840, 520]
     ]) {
       const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });
       await page.setContent(html, { waitUntil: 'load' });
